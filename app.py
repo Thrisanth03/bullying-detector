@@ -1,120 +1,171 @@
 import streamlit as st
-import requests
-import re
 import pandas as pd
+import sqlite3
+import re
+import requests
+import os
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime
+import easyocr
+import numpy as np
+from PIL import Image
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="SafeSchool | Secure Reporting", page_icon="🛡️", layout="wide")
+# --- CONFIG & STYLING ---
+st.set_page_config(page_title="SafeSchool AI", page_icon="🛡️", layout="wide")
 
-# --- CUSTOM CSS FOR PROFESSIONAL UI ---
 st.markdown("""
     <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 5px;
-        height: 3em;
-        background-color: #004a99;
-        color: white;
-    }
-    .login-card {
-        padding: 2rem;
-        border-radius: 10px;
-        background-color: white;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin-bottom: 2rem;
-    }
-    .auth-header {
-        text-align: center;
-        color: #1e293b;
-        font-family: 'Inter', sans-serif;
-    }
+    .stApp { background-color: #f8fafc; }
+    .report-card { background: white; padding: 25px; border-radius: 15px; border-left: 5px solid #3b82f6; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .counselor-stat { text-align: center; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- SESSION STATE INITIALIZATION ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'user_role' not in st.session_state:
-    st.session_state.user_role = None
+# --- DATABASE SETUP ---
+def init_db():
+    conn = sqlite3.connect('incidents.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS incidents 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, platform TEXT, 
+                  type TEXT, severity TEXT, summary TEXT, raw_text TEXT, action TEXT)''')
+    conn.commit()
+    conn.close()
 
-# --- AUTHENTICATION LOGIC ---
-def login_counselor(username, password):
-    # For Hackathon: Use simple check or st.secrets for credentials
-    if username == "admin" and password == "counselor123":
-        st.session_state.authenticated = True
-        st.session_state.user_role = "Counselor"
-        st.rerun()
-    else:
-        st.error("Invalid credentials")
+init_db()
 
-def enter_as_student():
-    st.session_state.authenticated = True
-    st.session_state.user_role = "Student"
-    st.rerun()
+# --- BACKEND LOGIC ---
+def anonymize(text):
+    text = re.sub(r'\S+@\S+', '[EMAIL]', text)
+    text = re.sub(r'\d{10}', '[PHONE]', text)
+    text = re.sub(r'\b[A-Z][a-z]+\b', '[NAME]', text)
+    return text
 
-def logout():
-    st.session_state.authenticated = False
-    st.session_state.user_role = None
-    st.rerun()
-
-# --- UI COMPONENTS ---
-
-# 1. LOGIN PAGE
-if not st.session_state.authenticated:
-    st.markdown("<h1 class='auth-header'>🛡️ SafeSchool Response Portal</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>Select your portal to continue</p>", unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-        st.subheader("Student Portal")
-        st.write("Submit a report 100% anonymously. No login required.")
-        if st.button("Enter Anonymous Portal"):
-            enter_as_student()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-        st.subheader("Counselor Portal")
-        user = st.text_input("Username")
-        pw = st.text_input("Password", type="password")
-        if st.button("Secure Login"):
-            login_counselor(user, pw)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# 2. APP CONTENT
-else:
-    # Top Navigation Bar
-    nav_col1, nav_col2 = st.columns([8, 1])
-    nav_col1.title(f"🛡️ {st.session_state.user_role} Dashboard")
-    if nav_col2.button("Logout"):
-        logout()
-
-    if st.session_state.user_role == "Student":
-        # --- STUDENT REPORTING UI ---
-        st.info("🔒 Your identity is hidden. The system automatically redacts personal info.")
-        with st.form("incident_report"):
-            report_text = st.text_area("What happened?")
-            platform = st.selectbox("Platform", ["WhatsApp", "Instagram", "School App"])
-            if st.form_submit_button("Submit Secure Report"):
-                # Insert your Anonymize + API logic here
-                st.success("Report submitted successfully.")
-
-    elif st.session_state.user_role == "Counselor":
-        # --- COUNSELOR DASHBOARD UI ---
-        st.subheader("Recent Incidents")
-        # Mock Data for UI Presentation
-        data = pd.DataFrame({
-            "ID": [101, 102],
-            "Type": ["Verbal Abuse", "Threat"],
-            "Severity": ["MEDIUM", "HIGH"],
-            "Timestamp": ["2026-04-16 10:00", "2026-04-16 11:30"]
-        })
-        st.table(data)
+def send_email_alert(data):
+    try:
+        msg = EmailMessage()
+        msg.set_content(f"High Severity Incident Detected!\n\nSummary: {data['summary']}\nType: {data['type']}\nAction: {data['action']}")
+        msg['Subject'] = f"🚨 URGENT: High Severity Incident - {data['type']}"
+        msg['From'] = st.secrets["SMTP_USER"]
+        msg['To'] = st.secrets["COUNSELOR_EMAIL"]
         
-        st.subheader("Analytics")
-        st.bar_chart(data["Severity"].value_counts())
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(st.secrets["SMTP_USER"], st.secrets["SMTP_PASS"])
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"Email failed: {e}")
+
+def run_analysis(text, image_count, platform, duration):
+    # 1. Toxicity Check (Cloud AI)
+    API_URL = "https://api-inference.huggingface.co/models/unitary/toxic-bert"
+    headers = {"Authorization": f"Bearer {st.secrets['HF_API_KEY']}"}
+    try:
+        response = requests.post(API_URL, headers=headers, json={"inputs": text}, timeout=5).json()
+        score = response[0][0]['score']
+    except:
+        score = 0.5
+
+    # 2. Logic Gates
+    b_type = "Verbal Abuse"
+    if any(w in text.lower() for w in ["kill", "threat", "hurt"]): b_type = "Threat"
+    
+    # Severity Logic
+    severity = "LOW"
+    if score > 0.8 or b_type == "Threat": severity = "HIGH"
+    elif score > 0.4 or image_count > 2 or duration != "days": severity = "MEDIUM"
+    
+    actions = {"HIGH": "Immediate intervention + parent alert", "MEDIUM": "Counselor meeting", "LOW": "Monitor"}
+    
+    return {"type": b_type, "severity": severity, "score": score, "action": actions[severity]}
+
+# --- AUTHENTICATION ---
+if 'auth' not in st.session_state: st.session_state.auth = False
+
+# --- UI LAYOUT ---
+if not st.session_state.auth:
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.image("https://cdn-icons-png.flaticon.com/512/1162/1162933.png", width=100)
+        st.title("SafeSchool Portal")
+        mode = st.tabs(["Student Portal", "Counselor Portal"])
+        
+        with mode[0]:
+            if st.button("Enter Anonymously", use_container_width=True):
+                st.session_state.role = "student"
+                st.session_state.auth = True
+                st.rerun()
+                
+        with mode[1]:
+            user = st.text_input("Username")
+            pw = st.text_input("Password", type="password")
+            if st.button("Login", use_container_width=True):
+                if user == st.secrets["C_USER"] and pw == st.secrets["C_PASS"]:
+                    st.session_state.role = "counselor"
+                    st.session_state.auth = True
+                    st.rerun()
+                else: st.error("Invalid Credentials")
+
+else:
+    if st.sidebar.button("Logout"):
+        st.session_state.auth = False
+        st.rerun()
+
+    if st.session_state.role == "student":
+        st.header("📝 Submit a Secure Report")
+        with st.container():
+            st.markdown("<div class='report-card'>", unsafe_allow_html=True)
+            u_text = st.text_area("What happened? (Text is optional if image is provided)")
+            u_img = st.file_uploader("Upload Evidence Screenshots", accept_multiple_files=True)
+            
+            c1, c2 = st.columns(2)
+            with c1: plat = st.selectbox("Platform", ["WhatsApp", "Instagram", "School App", "Discord"])
+            with c2: dur = st.select_slider("How long has this been happening?", ["days", "weeks", "months"])
+            
+            if st.button("Submit Anonymous Report", use_container_width=True):
+                with st.spinner("Processing with Cloud AI..."):
+                    # OCR Logic
+                    extracted = ""
+                    if u_img:
+                        reader = easyocr.Reader(['en'])
+                        for img_file in u_img:
+                            img = Image.open(img_file)
+                            res = reader.readtext(np.array(img))
+                            extracted += " " + " ".join([r[1] for r in res])
+                    
+                    full_text = anonymize(u_text + " " + extracted)
+                    results = run_analysis(full_text, len(u_img), plat, dur)
+                    
+                    # Store Data
+                    conn = sqlite3.connect('incidents.db')
+                    c = conn.cursor()
+                    c.execute("INSERT INTO incidents (timestamp, platform, type, severity, summary, raw_text, action) VALUES (?,?,?,?,?,?,?)",
+                              (datetime.now().strftime("%Y-%m-%d %H:%M"), plat, results['type'], results['severity'], 
+                               f"Incident on {plat} duration {dur}", full_text, results['action']))
+                    conn.commit()
+                    conn.close()
+                    
+                    if results['severity'] == "HIGH": send_email_alert(results)
+                    
+                    st.success("Report Submitted. Your identity is hidden.")
+                    st.balloons()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    else:
+        st.header("📊 Counselor Dashboard")
+        conn = sqlite3.connect('incidents.db')
+        df = pd.read_sql_query("SELECT * FROM incidents ORDER BY id DESC", conn)
+        conn.close()
+        
+        if not df.empty:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Cases", len(df))
+            m2.metric("High Severity", len(df[df['severity'] == "HIGH"]))
+            m3.metric("Common Type", df['type'].mode()[0])
+            
+            st.subheader("Incident Logs")
+            st.dataframe(df, use_container_width=True)
+            
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("Export Incident Report", data=csv, file_name="reports.csv", mime="text/csv")
+        else:
+            st.info("No incidents reported yet.")
