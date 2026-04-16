@@ -1,6 +1,5 @@
-streamlit>=1.30
-transformers>=4.38.2
-torch
-sentencepiece
-pandas
-pipeline
+streamlit
+transformers==4.38.2
+torch==2.2.0
+pillow
+pytesseract
