@@ -4,4 +4,4 @@ requests
 easyocr
 pillow
 numpy
-torch
+torch --index-url https://download.pytorch.org/whl/cpu
