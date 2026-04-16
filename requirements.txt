@@ -1,5 +1,6 @@
-fastapi>=0.111.0
-uvicorn[standard]>=0.30.1
-pydantic>=2.10.0
-requests>=2.32.3
-python-multipart>=0.0.9
+streamlit
+pandas
+easyocr
+requests
+pillow
+numpy
