@@ -3,3 +3,4 @@ transformers>=4.40
 torch
 sentencepiece
 pandas
+pipeline
