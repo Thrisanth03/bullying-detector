@@ -4,7 +4,7 @@ import re
 import sqlite3
 from datetime import datetime
 from PIL import Image
-import pytesseract
+
 
 st.set_page_config(page_title="Cyberbullying Analyzer", layout="centered")
 
@@ -42,8 +42,7 @@ CREATE TABLE IF NOT EXISTS reports (
 conn.commit()
 
 # ---------------- FUNCTIONS ----------------
-def extract_text_from_image(image):
-    return pytesseract.image_to_string(image)
+
 
 def anonymize(text):
     text = re.sub(r'\b[A-Z][a-z]{2,}\b', '[REDACTED]', text)
