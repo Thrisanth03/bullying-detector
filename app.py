@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -201,4 +201,4 @@ if page == "Counselor":
         st.write("**Severity:**", row["severity"])
         st.write("**Emotion:**", row["emotion"])
         st.write("**Summary:**", row["summary"])
-```
+
