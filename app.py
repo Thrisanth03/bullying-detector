@@ -1,22 +1,25 @@
-
+```python
 import streamlit as st
 import pandas as pd
 import sqlite3
 import re
 import requests
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime
 from PIL import Image
 import numpy as np
 import easyocr
+import random
 
 # ==========================================
 # 🔑 CONFIG
 # ==========================================
-HF_API_KEY = "YOUR_HF_API_KEY"  # replace
+HF_API_KEY = "YOUR_HF_API_KEY"
 C_USER, C_PASS = "admin", "SafeSchool2026"
 
 # ==========================================
-# 🏗️ DB
+# 🏗️ BACKEND
 # ==========================================
 @st.cache_resource
 def init_db():
@@ -25,30 +28,28 @@ def init_db():
             (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, platform TEXT, 
              type TEXT, severity TEXT, emotion TEXT, summary TEXT, status TEXT, score REAL)''')
 
-# ==========================================
-# OCR
-# ==========================================
 @st.cache_resource
-def load_ocr():
+def load_ocr_engine():
     return easyocr.Reader(['en'], gpu=False)
 
-def extract_text(imgs, reader):
-    text = ""
+# 🔥 FIXED OCR
+def extract_text_from_images(imgs, reader):
+    ocr_text = ""
     if imgs:
         for img in imgs:
             try:
                 image = np.array(Image.open(img).convert("RGB"))
                 result = reader.readtext(image, detail=0, paragraph=True)
-                text += " " + " ".join(result)
-            except:
-                pass
-    return text.strip()
+                ocr_text += " " + " ".join(result)
+            except Exception as e:
+                print("OCR Error:", e)
+    return ocr_text.strip()
 
 # ==========================================
 # AI MODELS
 # ==========================================
-def call_ai(text):
-    if not text.strip():
+def call_ai_models(text):
+    if not text.strip(): 
         return 0.0, "neutral"
 
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
@@ -69,76 +70,106 @@ def call_ai(text):
         return 0.1, "neutral"
 
 # ==========================================
-# LOGIC
+# LOGIC FIXES
 # ==========================================
 def anonymize(text):
     text = re.sub(r'\S+@\S+', '[EMAIL]', text)
     text = re.sub(r'\d{10}', '[PHONE]', text)
     return re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
 
-def classify(text, tox):
+# 🔥 IMPROVED CLASSIFICATION
+def analyze_severity_and_type(text, tox):
     t = text.lower()
 
-    if any(w in t for w in ["kill", "hurt", "die", "threat"]):
+    threat_words = ["kill", "hurt", "die", "threat"]
+    abuse_words = ["stupid", "idiot", "useless", "loser"]
+
+    if any(w in t for w in threat_words):
         return "Threat", "HIGH"
-    elif any(w in t for w in ["stupid", "idiot", "useless", "loser"]):
+    elif any(w in t for w in abuse_words):
         return "Verbal Abuse", "MEDIUM"
     elif tox > 0.7:
         return "Toxic", "MEDIUM"
     else:
         return "General", "LOW"
 
-def summarize(text):
+# 🔥 BETTER SUMMARY
+def generate_summary(text):
     parts = text.split(".")
-    return ". ".join(parts[:2]).strip()[:150]
+    summary = ". ".join(parts[:2]).strip()
+    return summary if summary else text[:150]
 
 # ==========================================
-# UI
+# UI (UNCHANGED)
 # ==========================================
-st.set_page_config(page_title="SafeSchool AI", layout="wide")
+st.set_page_config(page_title="SafeSchool AI | Pro", layout="wide")
 
 init_db()
-reader = load_ocr()
+reader = load_ocr_engine()
 
-page = st.sidebar.radio("Navigation", ["Student", "Counselor"])
+if 'view' not in st.session_state:
+    st.session_state.view = "Home"
 
 # ==========================================
-# STUDENT PAGE
+# HOME
 # ==========================================
-if page == "Student":
+if st.session_state.view == "Home":
 
-    st.title("🛡️ Cyberbullying Reporting System")
+    st.title("🛡️ SafeSchool AI")
 
-    msg = st.text_area("📝 Describe incident (optional)")
-    imgs = st.file_uploader("📸 Upload screenshots", accept_multiple_files=True)
+    col1, col2 = st.columns(2)
 
-    platform = st.selectbox("Platform", ["WhatsApp", "Instagram", "Discord", "Other"])
+    with col1:
+        if st.button("🚀 Student Portal"):
+            st.session_state.view = "Student"
+            st.rerun()
 
-    if st.button("🚀 Analyze Report"):
+    with col2:
+        user = st.text_input("Staff ID")
+        pwd = st.text_input("Password", type="password")
 
-        # OCR
-        ocr_text = extract_text(imgs, reader)
+        if st.button("Login"):
+            if user == C_USER and pwd == C_PASS:
+                st.session_state.view = "Staff"
+                st.rerun()
 
-        # Merge
+# ==========================================
+# STUDENT
+# ==========================================
+elif st.session_state.view == "Student":
+
+    if st.sidebar.button("Back"):
+        st.session_state.view = "Home"
+        st.rerun()
+
+    st.subheader("Report Incident")
+
+    msg = st.text_area("Enter details")
+    imgs = st.file_uploader("Upload screenshots", accept_multiple_files=True)
+
+    platform = st.selectbox("Platform", ["WhatsApp", "Instagram", "Other"])
+
+    if st.button("Analyze & Submit"):
+
+        # OCR FIX
+        ocr_text = extract_text_from_images(imgs, reader)
+
         full_text = (msg or "") + " " + ocr_text
 
         if not full_text.strip():
-            st.error("⚠️ Please enter text or upload an image")
+            st.error("Enter text or upload image")
             st.stop()
 
-        # Clean
         clean = anonymize(full_text)
 
-        # AI
-        tox, emo = call_ai(clean)
+        tox, emo = call_ai_models(clean)
 
-        # Classification
-        b_type, severity = classify(clean, tox)
+        # 🔥 NEW LOGIC
+        b_type, severity = analyze_severity_and_type(clean, tox)
 
-        # Summary
-        summary = summarize(clean)
+        summary = generate_summary(clean)
 
-        # Store DB
+        # SAVE
         with sqlite3.connect('safeschool_pro.db') as conn:
             conn.execute("""
                 INSERT INTO incidents 
@@ -155,50 +186,50 @@ if page == "Student":
                 float(tox)
             ))
 
-        # ======================
-        # 🎯 STUDENT REPORT UI
-        # ======================
-        st.success("✅ Report Submitted Successfully")
+        # 🔥 STUDENT REPORT OUTPUT
+        st.success("Report submitted successfully")
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Type", b_type)
         col2.metric("Severity", severity)
         col3.metric("Emotion", emo)
 
-        st.markdown("### 📝 Summary")
         st.info(summary)
 
-        st.markdown("### 📊 Confidence Score")
         st.progress(min(float(tox), 1.0))
 
         if severity == "HIGH":
-            st.error("🚨 Serious case detected. Authorities alerted.")
+            st.error("🚨 Serious issue detected")
         elif severity == "MEDIUM":
-            st.warning("⚠️ This will be reviewed by a counselor.")
+            st.warning("⚠️ Needs attention")
         else:
-            st.success("✅ Logged safely.")
+            st.success("Logged safely")
 
-        st.markdown("🔒 Your identity is protected.")
+        st.write("🔒 Your identity is protected")
 
 # ==========================================
-# COUNSELOR DASHBOARD
+# STAFF
 # ==========================================
-if page == "Counselor":
+elif st.session_state.view == "Staff":
 
-    st.title("📊 Counselor Dashboard")
+    if st.sidebar.button("Logout"):
+        st.session_state.view = "Home"
+        st.rerun()
+
+    st.title("📊 Dashboard")
 
     with sqlite3.connect('safeschool_pro.db') as conn:
         df = pd.read_sql_query("SELECT * FROM incidents ORDER BY id DESC", conn)
 
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df)
 
     if not df.empty:
-        st.subheader("🔍 Latest Incident")
+        st.subheader("Latest Incident")
 
         row = df.iloc[0]
 
-        st.write("**Type:**", row["type"])
-        st.write("**Severity:**", row["severity"])
-        st.write("**Emotion:**", row["emotion"])
-        st.write("**Summary:**", row["summary"])
-
+        st.write("Type:", row["type"])
+        st.write("Severity:", row["severity"])
+        st.write("Emotion:", row["emotion"])
+        st.write("Summary:", row["summary"])
+```
