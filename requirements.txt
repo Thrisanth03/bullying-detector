@@ -5,3 +5,4 @@ Pillow
 easyocr
 requests
 torch
+torchvision
